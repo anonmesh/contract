@@ -1,0 +1,52 @@
+# Anchor
+.anchor
+Anchor.lock
+
+# Build artifacts
+target/
+build/
+dist/
+**/*.rs.bk
+*.so
+*.idl
+
+# Node
+node_modules/
+.yarn/
+.yarnrc
+package-lock.json
+
+# Test ledger
+test-ledger/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Arcium specific
+artifacts/
+encrypted-ixs/*.arcis
+!encrypted-ixs/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.js
+!migrations/*.js
