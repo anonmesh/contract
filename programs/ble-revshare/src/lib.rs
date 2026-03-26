@@ -8,7 +8,7 @@ use arcium_macros::circuit_hash;
 pub type TokenAccountInfo<'info> = Account<'info, SplTokenAccount>;
 pub type MintInfo<'info> = Account<'info, SplMint>;
 
-declare_id!("7fvHNYVuZP6EYt68GLUa4kU8f8dCBSaGafL9aDhhtMZN"); // Default localnet ID, to be updated
+declare_id!("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks"); // Default localnet ID, to be updated
 
 const COMP_DEF_OFFSET_PAYMENT_STATS: u32 = comp_def_offset("payment_stats");
 
@@ -70,7 +70,22 @@ pub mod ble_revshare {
         }
 
         let broadcaster_share_amount: u64;
-// ... (lines 54-106 skipped, assuming content matches)
+
+        if let Some(broadcaster) = &ctx.accounts.broadcaster {
+            // Validate broadcaster token account
+            let broadcaster_token_account = ctx.accounts.broadcaster_token_account.as_ref().ok_or(ErrorCode::MissingBroadcasterAccount)?;
+            if broadcaster_token_account.owner != broadcaster.key() {
+                return Err(ErrorCode::MissingBroadcasterAccount.into());
+            }
+            if broadcaster_token_account.mint != ctx.accounts.mint.key() {
+                return Err(ErrorCode::MissingBroadcasterAccount.into());
+            }
+
+            // For simplicity, let's say the broadcaster gets 10% of the payment amount
+            broadcaster_share_amount = payment_amount / 10;
+        } else {
+            broadcaster_share_amount = 0;
+        }
 
         let args = ArgBuilder::new()
              .x25519_pubkey(pub_key)
@@ -92,7 +107,6 @@ pub mod ble_revshare {
             ctx.accounts,
             computation_offset,
             args,
-            None,
             vec![PaymentStatsCallback::callback_ix(
                 computation_offset,
                 &ctx.accounts.mxe_account,
@@ -286,14 +300,21 @@ pub struct PaymentStatsCallback<'info> {
 pub struct InitPaymentStatsCompDef<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    
+
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
-    
+
     #[account(mut)]
     /// CHECK: comp_def_account
     pub comp_def_account: UncheckedAccount<'info>,
-    
+
+    #[account(mut)]
+    /// CHECK: address_lookup_table validated by arcium program
+    pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// CHECK: lut_program
+    pub lut_program: UncheckedAccount<'info>,
+
     pub arcium_program: Program<'info, Arcium>,
     pub system_program: Program<'info, System>,
 }

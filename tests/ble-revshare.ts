@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { Keypair, PublicKey, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
+import { Keypair, PublicKey, AddressLookupTableProgram } from "@solana/web3.js";
 import { BleRevshare } from "../target/types/ble_revshare";
 import { randomBytes } from "crypto";
 import {
@@ -19,6 +19,8 @@ import {
     getClusterAccAddress,
     getFeePoolAccAddress,
     getClockAccAddress,
+    getLookupTableAddress,
+    getArciumProgram,
 } from "@arcium-hq/client";
 import {
     createMint,
@@ -242,12 +244,27 @@ describe("ble-revshare", () => {
             getArciumProgramId()
         )[0];
 
+        const mxeAddress = getMXEAccAddress(program.programId);
+
+        let lutOffsetSlot = new anchor.BN(0);
+        try {
+            const arciumProg = getArciumProgram(provider);
+            const mxeData = await arciumProg.account['mxeAccount'].fetch(mxeAddress);
+            lutOffsetSlot = (mxeData as any).lutOffsetSlot;
+        } catch (e) {
+            console.warn("Could not fetch lutOffsetSlot, using 0:", e);
+        }
+
+        const addressLookupTable = getLookupTableAddress(program.programId, lutOffsetSlot);
+
         const sig = await program.methods[methodName]()
             .accounts({
                 compDefAccount: compDefPDA,
                 payer: owner.publicKey,
-                mxeAccount: getMXEAccAddress(program.programId),
-            })
+                mxeAccount: mxeAddress,
+                addressLookupTable,
+                lutProgram: AddressLookupTableProgram.programId,
+            } as any)
             .signers([owner])
             .rpc({
                 commitment: "confirmed",

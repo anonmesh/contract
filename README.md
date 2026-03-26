@@ -47,7 +47,7 @@ arcium build
 ### 2. Deploy to devnet
 
 ```bash
-export ANCHOR_PROVIDER_URL="https://devnet.helius-rpc.com/?api-key=YOUR_API_KEY"
+export ANCHOR_PROVIDER_URL="https://api.devnet.solana.com"
 export ANCHOR_WALLET="~/.config/solana/id.json"
 export ARCIUM_CLUSTER_OFFSET=456
 
@@ -62,6 +62,12 @@ arcium deploy \
 
 ```bash
 npx ts-node init-comp-def-final.ts
+```
+
+### 4. Whitelist tokens
+
+```bash
+npx ts-node scripts/whitelist-tokens.ts
 ```
 
 ## Testing
