@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as anchor from '@coral-xyz/anchor';
+import BN from 'bn.js';
 import {
   getCompDefAccOffset,
   getMXEAccAddress,
@@ -60,7 +61,7 @@ async function initCompDefFinal() {
       console.log('📝 Creating new computation definition account...');
 
       // Fetch lutOffsetSlot from MXE account for LUT derivation
-      let lutOffsetSlot = new anchor.BN(0);
+      let lutOffsetSlot = new BN(0);
       try {
         const arciumProg = getArciumProgram(provider);
         const mxeData = await arciumProg.account['mxeAccount'].fetch(mxeAddress);

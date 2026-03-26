@@ -25,7 +25,3 @@ test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\""
 startup_wait = 60000
 shutdown_wait = 2000
 upgradeable = false
-
-# Add this section for Arcium devnet (common pattern)
-[clusters.devnet]
-offset = 456   # ← Common/recommended devnet cluster offset from Arcium docs. Change if you have a specific one (e.g. from your cluster init)

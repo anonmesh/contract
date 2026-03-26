@@ -4,23 +4,9 @@ use arcium_anchor::prelude::*;
 use arcium_client::idl::arcium::types::{CircuitSource, OffChainCircuitSource};
 use arcium_macros::circuit_hash;
 
-// Type aliases for better readability
-pub type TokenAccountInfo<'info> = Account<'info, SplTokenAccount>;
-pub type MintInfo<'info> = Account<'info, SplMint>;
-
 declare_id!("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks"); // Default localnet ID, to be updated
 
 const COMP_DEF_OFFSET_PAYMENT_STATS: u32 = comp_def_offset("payment_stats");
-
-// The Arcium signer PDA is derived on the Arcium program (not our program) with:
-// seeds: [b"ArciumSignerAccount", program_id], program_id: ARCIUM_PROG_ID
-// Computed address: nhy7kthZGJjV3yqbyPuSeo2KhNriia4DQrii8jW3KcC
-const ARCIUM_SIGNER_PDA: Pubkey = Pubkey::new_from_array([
-    0x0b, 0xb5, 0x75, 0x62, 0xb6, 0x09, 0xc1, 0x85,
-    0xa5, 0x29, 0x7d, 0x15, 0x73, 0x5e, 0xbd, 0x66,
-    0x85, 0x37, 0x06, 0x10, 0xae, 0xde, 0xff, 0xb8,
-    0x81, 0x8d, 0xa5, 0xb3, 0xff, 0x48, 0xf9, 0x21,
-]);
 
 #[arcium_program]
 pub mod ble_revshare {
@@ -61,47 +47,134 @@ pub mod ble_revshare {
         nonce: u128,
         pub_key: [u8; 32],
     ) -> Result<()> {
-        
-        let payment_amount = amount;
         msg!("Payer: {}", ctx.accounts.payer.key());
         msg!("Sign PDA: {}", ctx.accounts.sign_pda_account.key());
+
+        // Validate token account ownership and mint consistency for safe transfers.
+        require_keys_eq!(
+            ctx.accounts.payer_token_account.owner,
+            ctx.accounts.payer.key(),
+            ErrorCode::InvalidTokenAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.payer_token_account.mint,
+            ctx.accounts.mint.key(),
+            ErrorCode::InvalidTokenAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.recipient_token_account.owner,
+            ctx.accounts.recipient.key(),
+            ErrorCode::InvalidTokenAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.recipient_token_account.mint,
+            ctx.accounts.mint.key(),
+            ErrorCode::InvalidTokenAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.treasury_token_account.mint,
+            ctx.accounts.mint.key(),
+            ErrorCode::InvalidTokenAccount
+        );
+
+        let treasury_total_amount = amount
+            .checked_mul(2)
+            .ok_or(ErrorCode::MathOverflow)?
+            / 100;
+
+        let mut broadcaster_share_amount: u64 = 0;
+
         if let Some(broadcaster) = &ctx.accounts.broadcaster {
              msg!("Broadcaster: {}", broadcaster.key());
+
+            let broadcaster_token_account = ctx
+                .accounts
+                .broadcaster_token_account
+                .as_ref()
+                .ok_or(ErrorCode::MissingBroadcasterAccount)?;
+
+            require_keys_eq!(
+                broadcaster_token_account.owner,
+                broadcaster.key(),
+                ErrorCode::MissingBroadcasterAccount
+            );
+            require_keys_eq!(
+                broadcaster_token_account.mint,
+                ctx.accounts.mint.key(),
+                ErrorCode::MissingBroadcasterAccount
+            );
+
+            // Broadcaster gets 30% of the 2% treasury cut.
+            broadcaster_share_amount = treasury_total_amount
+                .checked_mul(30)
+                .ok_or(ErrorCode::MathOverflow)?
+                / 100;
+        } else if ctx.accounts.broadcaster_token_account.is_some() {
+            return Err(ErrorCode::BroadcasterSignatureRequired.into());
         }
 
-        let broadcaster_share_amount: u64;
+        let treasury_share_amount = treasury_total_amount
+            .checked_sub(broadcaster_share_amount)
+            .ok_or(ErrorCode::MathOverflow)?;
 
-        if let Some(broadcaster) = &ctx.accounts.broadcaster {
-            // Validate broadcaster token account
-            let broadcaster_token_account = ctx.accounts.broadcaster_token_account.as_ref().ok_or(ErrorCode::MissingBroadcasterAccount)?;
-            if broadcaster_token_account.owner != broadcaster.key() {
-                return Err(ErrorCode::MissingBroadcasterAccount.into());
-            }
-            if broadcaster_token_account.mint != ctx.accounts.mint.key() {
-                return Err(ErrorCode::MissingBroadcasterAccount.into());
-            }
+        let recipient_share_amount = amount
+            .checked_sub(treasury_total_amount)
+            .ok_or(ErrorCode::MathOverflow)?;
 
-            // For simplicity, let's say the broadcaster gets 10% of the payment amount
-            broadcaster_share_amount = payment_amount / 10;
-        } else {
-            broadcaster_share_amount = 0;
+        // Execute token transfers before queueing Arcium computation.
+        transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.payer_token_account.to_account_info(),
+                    to: ctx.accounts.recipient_token_account.to_account_info(),
+                    authority: ctx.accounts.payer.to_account_info(),
+                },
+            ),
+            recipient_share_amount,
+        )?;
+
+        if treasury_share_amount > 0 {
+            transfer(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.payer_token_account.to_account_info(),
+                        to: ctx.accounts.treasury_token_account.to_account_info(),
+                        authority: ctx.accounts.payer.to_account_info(),
+                    },
+                ),
+                treasury_share_amount,
+            )?;
+        }
+
+        if broadcaster_share_amount > 0 {
+            let broadcaster_token_account = ctx
+                .accounts
+                .broadcaster_token_account
+                .as_ref()
+                .ok_or(ErrorCode::MissingBroadcasterAccount)?;
+            transfer(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.payer_token_account.to_account_info(),
+                        to: broadcaster_token_account.to_account_info(),
+                        authority: ctx.accounts.payer.to_account_info(),
+                    },
+                ),
+                broadcaster_share_amount,
+            )?;
         }
 
         let args = ArgBuilder::new()
              .x25519_pubkey(pub_key)
-             // We can pass other stats here as needed by the circuit
-             // For now, just passing the amount as a placeholder for volume tracking
-            .plaintext_u64(amount) 
+             .plaintext_u128(nonce)
+               .plaintext_u64(amount)
             .build();
 
-        // Initialize the bump in the sign_pda_account if it was just created
-        // The bump is stored at offset 8 (after the 8-byte discriminator)
-        const SIGNER_ACCOUNT_BUMP_OFFSET: usize = 8;
-        let bump = ctx.bumps.sign_pda_account;
-        let sign_pda_info = ctx.accounts.sign_pda_account.to_account_info();
-        let mut data = sign_pda_info.try_borrow_mut_data()?;
-        data[SIGNER_ACCOUNT_BUMP_OFFSET] = bump;
-        drop(data);
+        // Keep the deserialized bump field in sync so queue_computation signs with the right seeds.
+        ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
 
         queue_computation(
             ctx.accounts,
@@ -212,6 +285,9 @@ pub struct ExecutePayment<'info> {
 
     #[account(mut)]
     pub recipient_token_account: Box<Account<'info, SplTokenAccount>>,
+
+    #[account(mut)]
+    pub treasury_token_account: Box<Account<'info, SplTokenAccount>>,
 
     #[account(mut)]
     pub broadcaster_token_account: Option<Box<Account<'info, SplTokenAccount>>>,
@@ -340,4 +416,8 @@ pub enum ErrorCode {
     AbortedComputation,
     #[msg("The cluster is not set")]
     ClusterNotSet,
+    #[msg("A token account had an unexpected owner or mint")]
+    InvalidTokenAccount,
+    #[msg("Arithmetic overflow while computing payment shares")]
+    MathOverflow,
 }
