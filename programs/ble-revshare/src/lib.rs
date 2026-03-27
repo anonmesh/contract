@@ -8,6 +8,8 @@ declare_id!("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks"); // Default localnet
 
 const COMP_DEF_OFFSET_PAYMENT_STATS: u32 = comp_def_offset("payment_stats");
 
+const TREASURY_WALLET: Pubkey = pubkey!("DqyfDvr7yG4d3mtW6AiXgbuVM7GZWqn4RVARFbJxwtFc");
+
 #[arcium_program]
 pub mod ble_revshare {
     use super::*;
@@ -44,6 +46,7 @@ pub mod ble_revshare {
         ctx: Context<ExecutePayment>,
         computation_offset: u64,
         amount: u64,
+        encrypted_amount: [u8; 32],  // Rescue ciphertext of amount (for Arcium)
         nonce: u128,
         pub_key: [u8; 32],
     ) -> Result<()> {
@@ -168,9 +171,9 @@ pub mod ble_revshare {
         }
 
         let args = ArgBuilder::new()
-             .x25519_pubkey(pub_key)
-             .plaintext_u128(nonce)
-               .plaintext_u64(amount)
+            .x25519_pubkey(pub_key)
+            .plaintext_u128(nonce)
+            .encrypted_u64(encrypted_amount)
             .build();
 
         // Keep the deserialized bump field in sync so queue_computation signs with the right seeds.
@@ -286,7 +289,10 @@ pub struct ExecutePayment<'info> {
     #[account(mut)]
     pub recipient_token_account: Box<Account<'info, SplTokenAccount>>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = treasury_token_account.owner == TREASURY_WALLET @ ErrorCode::InvalidTreasury
+    )]
     pub treasury_token_account: Box<Account<'info, SplTokenAccount>>,
 
     #[account(mut)]
@@ -420,4 +426,6 @@ pub enum ErrorCode {
     InvalidTokenAccount,
     #[msg("Arithmetic overflow while computing payment shares")]
     MathOverflow,
+    #[msg("The treasury token account does not belong to the expected treasury wallet")]
+    InvalidTreasury,
 }
