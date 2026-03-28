@@ -1,15 +1,11 @@
+import { before, describe, test } from "node:test";
+import assert from "node:assert";
+import { randomBytes } from "node:crypto";
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
-import { Keypair, PublicKey, AddressLookupTableProgram } from "@solana/web3.js";
-import { BleRevshare } from "../target/types/ble_revshare";
-import { randomBytes } from "crypto";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import {
-  awaitComputationFinalization,
   getArciumEnv,
   getCompDefAccOffset,
-  getArciumAccountBaseSeed,
-  getArciumProgramId,
-  buildFinalizeCompDefTx,
   deserializeLE,
   getMXEAccAddress,
   getMempoolAccAddress,
@@ -19,38 +15,64 @@ import {
   getClusterAccAddress,
   getFeePoolAccAddress,
   getClockAccAddress,
-  getLookupTableAddress,
-  getArciumProgram,
 } from "@arcium-hq/client";
 import {
   createMint,
   createAccount,
   mintTo,
   getAccount,
-  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import * as fs from "fs";
-import * as os from "os";
-import { expect } from "chai";
+import { BleRevshare } from "../target/types/ble_revshare";
 
-const CLUSTER_OFFSET: number | null = null;
+const TREASURY_WALLET = new PublicKey("DqyfDvr7yG4d3mtW6AiXgbuVM7GZWqn4RVARFbJxwtFc");
+const MINT_DECIMALS = 6;
+const MINT_SUPPLY = 1_000_000;
+const PAYMENT_AMOUNT = new anchor.BN(1_000);
 
-function getClusterAccount(): PublicKey {
-  if (CLUSTER_OFFSET !== null) {
-    return getClusterAccAddress(CLUSTER_OFFSET);
-  } else {
-    return getClusterAccAddress(getArciumEnv().arciumClusterOffset);
-  }
+const PAYLOAD_TTL_SECS = 600; // 10 minutes
+
+// 2% treasury cut; 30% of that to broadcaster, 70% to treasury
+const TREASURY_CUT_BPS = 2;
+const BROADCASTER_SHARE_PCT = 30;
+
+const RECIPIENT_EXPECTED = PAYMENT_AMOUNT.muln(100 - TREASURY_CUT_BPS).divn(100).toNumber(); // 980
+const BROADCASTER_EXPECTED = PAYMENT_AMOUNT.muln(TREASURY_CUT_BPS).divn(100).muln(BROADCASTER_SHARE_PCT).divn(100).toNumber(); // 6
+
+anchor.setProvider(anchor.AnchorProvider.env());
+const program = anchor.workspace.BleRevshare as anchor.Program<BleRevshare>;
+const provider = anchor.getProvider() as anchor.AnchorProvider;
+const payer = (provider.wallet as any).payer as Keypair;
+const clusterOffset = getArciumEnv().arciumClusterOffset;
+
+function arciumAccounts(computationOffset: anchor.BN) {
+  return {
+    computationAccount: getComputationAccAddress(clusterOffset, computationOffset),
+    clusterAccount: getClusterAccAddress(clusterOffset),
+    mxeAccount: getMXEAccAddress(program.programId),
+    mempoolAccount: getMempoolAccAddress(clusterOffset),
+    executingPool: getExecutingPoolAccAddress(clusterOffset),
+    compDefAccount: getCompDefAccAddress(
+      program.programId,
+      Buffer.from(getCompDefAccOffset("payment_v3")).readUInt32LE()
+    ),
+    poolAccount: getFeePoolAccAddress(),
+    clockAccount: getClockAccAddress(),
+  };
 }
 
+function paymentReceipt(paymentId: Buffer): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("payment_receipt"), paymentId],
+    program.programId
+  )[0];
+}
+
+const ensureError = (err: unknown): Error => {
+  if (err instanceof Error) return err;
+  return new Error(`Non-Error thrown: ${JSON.stringify(err)}`);
+};
+
 describe("ble-revshare", () => {
-  anchor.setProvider(anchor.AnchorProvider.env());
-  const program = anchor.workspace.BleRevshare as Program<BleRevshare>;
-  const provider = anchor.getProvider() as anchor.AnchorProvider;
-  const payer = (provider.wallet as any).payer as Keypair;
-
-  const clusterAccount = getClusterAccount();
-
   let mint: PublicKey;
   let senderTokenAccount: PublicKey;
   let recipientTokenAccount: PublicKey;
@@ -58,245 +80,268 @@ describe("ble-revshare", () => {
   let broadcasterTokenAccount: PublicKey;
 
   const recipient = Keypair.generate();
-  const treasury = Keypair.generate();
   const broadcaster = Keypair.generate();
 
   before(async () => {
-    // Setup tokens
-    mint = await createMint(
-      provider.connection,
-      payer,
-      payer.publicKey,
-      null,
-      6
-    );
+    mint = await createMint(provider.connection, payer, payer.publicKey, null, MINT_DECIMALS);
 
-    senderTokenAccount = await createAccount(
-      provider.connection,
-      payer,
-      mint,
-      payer.publicKey
-    );
-
-    recipientTokenAccount = await createAccount(
-      provider.connection,
-      payer,
-      mint,
-      recipient.publicKey
-    );
+    [senderTokenAccount, recipientTokenAccount, broadcasterTokenAccount] = await Promise.all([
+      createAccount(provider.connection, payer, mint, payer.publicKey),
+      createAccount(provider.connection, payer, mint, recipient.publicKey),
+      createAccount(provider.connection, payer, mint, broadcaster.publicKey),
+    ]);
 
     treasuryTokenAccount = await createAccount(
       provider.connection,
       payer,
       mint,
-      treasury.publicKey
+      TREASURY_WALLET,
+      Keypair.generate() // off-curve owner requires explicit keypair
     );
 
-    broadcasterTokenAccount = await createAccount(
-      provider.connection,
-      payer,
-      mint,
-      broadcaster.publicKey
-    );
-
-    await mintTo(
-      provider.connection,
-      payer,
-      mint,
-      senderTokenAccount,
-      payer,
-      1000000 // 1 USDC
-    );
+    await mintTo(provider.connection, payer, mint, senderTokenAccount, payer, MINT_SUPPLY);
   });
 
-  // it("Initializes comp def for payment_stats", async () => {
-  //     const sig = await initCompDef(
-  //         program,
-  //         payer,
-  //         "payment_stats",
-  //         "initPaymentStatsCompDef"
-  //     );
-  //     console.log("payment_stats initialized", sig);
-  // });
-
-  it("Adds token to whitelist", async () => {
-    await program.methods
-      .initWhitelistToken()
-      .accounts({
-        admin: payer.publicKey,
-        mint: mint,
-      })
-      .rpc();
-
-    const [whitelistEntry] = PublicKey.findProgramAddressSync(
-      [Buffer.from("whitelist"), mint.toBuffer()],
-      program.programId
-    );
-
-    const account = await program.account.whitelistEntry.fetch(whitelistEntry);
-    expect(account.mint.toString()).to.equal(mint.toString());
-  });
-
-  it("Executes payment with Broadcaster (70/30)", async () => {
+  test("executes payment and distributes shares correctly (broadcaster present)", async () => {
     const computationOffset = new anchor.BN(randomBytes(8), "hex");
     const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
-    const amount = new anchor.BN(1000); // 1000 units
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
 
-    // We expect 300 to broadcaster, 700 to recipient
+    await program.methods
+      .executePayment(
+        computationOffset,
+        Array.from(paymentId),
+        PAYMENT_AMOUNT,
+        Array.from(randomBytes(32)),
+        new anchor.BN(nonce.toString()),
+        Array.from(payer.publicKey.toBytes()),
+        expiresAt
+      )
+      .accountsPartial({
+        payer: payer.publicKey,
+        broadcaster: broadcaster.publicKey,
+        recipient: recipient.publicKey,
+        mint,
+        paymentReceipt: paymentReceipt(paymentId),
+        payerTokenAccount: senderTokenAccount,
+        recipientTokenAccount,
+        treasuryTokenAccount,
+        broadcasterTokenAccount,
+        ...arciumAccounts(computationOffset),
+      })
+      .signers([payer, broadcaster])
+      .rpc();
 
-    // Signer PDA
-    const [signPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("ArciumSignerAccount")],
-      program.programId
-    );
+    const [recipientBalance, broadcasterBalance] = await Promise.all([
+      getAccount(provider.connection, recipientTokenAccount).then((a) => Number(a.amount)),
+      getAccount(provider.connection, broadcasterTokenAccount).then((a) => Number(a.amount)),
+    ]);
 
-    try {
-      await program.methods
+    assert.strictEqual(recipientBalance, RECIPIENT_EXPECTED);
+    assert.strictEqual(broadcasterBalance, BROADCASTER_EXPECTED);
+  });
+
+  test("rejects duplicate payment_id (replay protection)", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const receipt = paymentReceipt(paymentId);
+
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
+
+    const sendPayment = () =>
+      program.methods
         .executePayment(
           computationOffset,
-          amount,
+          Array.from(paymentId),
+          PAYMENT_AMOUNT,
+          Array.from(randomBytes(32)),
           new anchor.BN(nonce.toString()),
-          [...payer.publicKey.toBytes()]
+          Array.from(payer.publicKey.toBytes()),
+          expiresAt
         )
         .accountsPartial({
           payer: payer.publicKey,
           broadcaster: broadcaster.publicKey,
           recipient: recipient.publicKey,
-          mint: mint,
+          mint,
+          paymentReceipt: receipt,
           payerTokenAccount: senderTokenAccount,
-          recipientTokenAccount: recipientTokenAccount,
-          treasuryTokenAccount: treasuryTokenAccount,
-          broadcasterTokenAccount: broadcasterTokenAccount,
-          // Arcium accounts
-          computationAccount: getComputationAccAddress(
-            getArciumEnv().arciumClusterOffset,
-            computationOffset
-          ),
-          clusterAccount,
-          mxeAccount: getMXEAccAddress(program.programId),
-          mempoolAccount: getMempoolAccAddress(
-            getArciumEnv().arciumClusterOffset
-          ),
-          executingPool: getExecutingPoolAccAddress(
-            getArciumEnv().arciumClusterOffset
-          ),
-          compDefAccount: getCompDefAccAddress(
-            program.programId,
-            Buffer.from(getCompDefAccOffset("payment_stats")).readUInt32LE()
-          ),
-          poolAccount: getFeePoolAccAddress(),
-          clockAccount: getClockAccAddress(),
-          // Actually usually ARCIUM_FEE_POOL_ACCOUNT_ADDRESS is hardcoded or imported.
-          // Client usually doesn't need to pass it if it's constant unless IDL requires it.
-          // But my IDL does require it.
-          // I'll grab it from checking IDL or just rely on anchor to fill if seeds match, but here address is constant.
-          // Wait, in lib.rs I used `ARCIUM_FEE_POOL_ACCOUNT_ADDRESS`.
-          // I should import it from client if available or defined.
-          // Checking escrow.ts, it was passed as valid account? No, `readKpJson`...
-          // escrow.ts did NOT import it.
-          // Wait, `initializeEscrow` in escrow.ts didn't pass `poolAccount` manually?
-          // Ah, looking at `escrow.ts` lines 115-130: NO poolAccount passed!
-          // Anchor can resolve if default? No.
-          // Wait, Anchor `accountsPartial` might not enforce all strictly if they are inferred.
-          // But `poolAccount` has `address = ...` constraint.
-          // The constraint is on the PROGRAM side.
-          // The client must pass the account with that address.
-          // If the IDL has a default address, Anchor uses it.
-          // BUT `ARCIUM_FEE_POOL_ACCOUNT_ADDRESS` is a constant in the program.
-          // How does Client know it?
-          // Usually we need to pass it.
-          // In escrow.ts, I see `mxeAccount`, `mempoolAccount` etc. but no `poolAccount`.
-          // Let me re-read `escrow.ts` InitializeEscrow accounts carefully.
-          // lines 115-130: OWNER, ComputationAccount, ClusterAccount, MXEAccount, Mempool, ExecutingPool, CompDef, Escrow.
-          // THAT'S IT.
-          // But `lib.rs` InitializeEscrow struct has `pool_account` and `clock_account`.
-          // Why aren't they passed?
-          // Maybe they are *optional* or inferred by Anchor if standard?
-          // Or maybe `accountsPartial` lets me skip them and it fails?
-          // OR the IDL has them marked such that Anchor resolves them?
-          // Arcium Anchor client might inject them?
-          // I will assume I need to pass them or let Arcium client handle.
-          // I'll check `arcium-hq/client` exports.
+          recipientTokenAccount,
+          treasuryTokenAccount,
+          broadcasterTokenAccount,
+          ...arciumAccounts(computationOffset),
         })
         .signers([payer, broadcaster])
         .rpc();
 
-      // Check balances
-      const recipientBalance = (
-        await getAccount(provider.connection, recipientTokenAccount)
-      ).amount;
-      const broadcasterBalance = (
-        await getAccount(provider.connection, broadcasterTokenAccount)
-      ).amount;
+    await sendPayment();
+    await assert.rejects(sendPayment, /already in use/i);
+  });
 
-      expect(recipientBalance.toString()).to.equal("700");
-      expect(broadcasterBalance.toString()).to.equal("300");
-    } catch (e) {
-      // If poolAccount is missing try explicit pass
-      console.error(e);
-      throw e;
+  test("rejects invalid treasury account", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
+
+    // senderTokenAccount is owned by payer, not TREASURY_WALLET — valid for triggering InvalidTreasury
+    try {
+      await program.methods
+        .executePayment(
+          computationOffset,
+          Array.from(paymentId),
+          PAYMENT_AMOUNT,
+          Array.from(randomBytes(32)),
+          new anchor.BN(nonce.toString()),
+          Array.from(payer.publicKey.toBytes()),
+          expiresAt
+        )
+        .accountsPartial({
+          payer: payer.publicKey,
+          broadcaster: broadcaster.publicKey,
+          recipient: recipient.publicKey,
+          mint,
+          paymentReceipt: paymentReceipt(paymentId),
+          payerTokenAccount: senderTokenAccount,
+          recipientTokenAccount,
+          treasuryTokenAccount: senderTokenAccount,
+          broadcasterTokenAccount,
+          ...arciumAccounts(computationOffset),
+        })
+        .signers([payer, broadcaster])
+        .rpc();
+
+      assert.fail("Expected InvalidTreasury error");
+    } catch (err) {
+      const error = ensureError(err);
+      assert.match(error.message, /InvalidTreasury/);
     }
   });
 
-  async function initCompDef(
-    program: Program<BleRevshare>,
-    owner: anchor.web3.Keypair,
-    compDefName: string,
-    methodName: "initPaymentStatsCompDef"
-  ): Promise<string> {
-    const baseSeedCompDefAcc = getArciumAccountBaseSeed(
-      "ComputationDefinitionAccount"
-    );
-    const offset = getCompDefAccOffset(compDefName);
+  test("executes payment without broadcaster (all treasury cut goes to treasury)", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
 
-    const compDefPDA = PublicKey.findProgramAddressSync(
-      [baseSeedCompDefAcc, program.programId.toBuffer(), offset],
-      getArciumProgramId()
-    )[0];
+    const [recipientBefore, treasuryBefore] = await Promise.all([
+      getAccount(provider.connection, recipientTokenAccount).then((a) => Number(a.amount)),
+      getAccount(provider.connection, treasuryTokenAccount).then((a) => Number(a.amount)),
+    ]);
 
-    const mxeAddress = getMXEAccAddress(program.programId);
+    await program.methods
+      .executePayment(
+        computationOffset,
+        Array.from(paymentId),
+        PAYMENT_AMOUNT,
+        Array.from(randomBytes(32)),
+        new anchor.BN(nonce.toString()),
+        Array.from(payer.publicKey.toBytes()),
+        expiresAt
+      )
+      .accountsPartial({
+        payer: payer.publicKey,
+        broadcaster: null,
+        recipient: recipient.publicKey,
+        mint,
+        paymentReceipt: paymentReceipt(paymentId),
+        payerTokenAccount: senderTokenAccount,
+        recipientTokenAccount,
+        treasuryTokenAccount,
+        broadcasterTokenAccount: null,
+        ...arciumAccounts(computationOffset),
+      })
+      .signers([payer])
+      .rpc();
 
-    let lutOffsetSlot = new anchor.BN(0);
+    const TREASURY_NO_BROADCASTER = PAYMENT_AMOUNT.muln(TREASURY_CUT_BPS).divn(100).toNumber(); // 20
+
+    const [recipientAfter, treasuryAfter] = await Promise.all([
+      getAccount(provider.connection, recipientTokenAccount).then((a) => Number(a.amount)),
+      getAccount(provider.connection, treasuryTokenAccount).then((a) => Number(a.amount)),
+    ]);
+
+    assert.strictEqual(recipientAfter - recipientBefore, RECIPIENT_EXPECTED);         // +980
+    assert.strictEqual(treasuryAfter - treasuryBefore, TREASURY_NO_BROADCASTER);     // +20
+  });
+
+  test("rejects broadcaster token account provided without broadcaster co-signing", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
+
     try {
-      const arciumProg = getArciumProgram(provider);
-      const mxeData = await arciumProg.account["mxeAccount"].fetch(mxeAddress);
-      lutOffsetSlot = (mxeData as any).lutOffsetSlot;
-    } catch (e) {
-      console.warn("Could not fetch lutOffsetSlot, using 0:", e);
+      await program.methods
+        .executePayment(
+          computationOffset,
+          Array.from(paymentId),
+          PAYMENT_AMOUNT,
+          Array.from(randomBytes(32)),
+          new anchor.BN(nonce.toString()),
+          Array.from(payer.publicKey.toBytes()),
+          expiresAt
+        )
+        .accountsPartial({
+          payer: payer.publicKey,
+          broadcaster: null,
+          recipient: recipient.publicKey,
+          mint,
+          paymentReceipt: paymentReceipt(paymentId),
+          payerTokenAccount: senderTokenAccount,
+          recipientTokenAccount,
+          treasuryTokenAccount,
+          broadcasterTokenAccount, // token account supplied but no co-signer
+          ...arciumAccounts(computationOffset),
+        })
+        .signers([payer])
+        .rpc();
+
+      assert.fail("Expected BroadcasterSignatureRequired error");
+    } catch (err) {
+      const error = ensureError(err);
+      assert.match(error.message, /BroadcasterSignatureRequired/);
     }
+  });
 
-    const addressLookupTable = getLookupTableAddress(
-      program.programId,
-      lutOffsetSlot
-    );
+  test("rejects expired payment payload", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiredAt = new anchor.BN(Math.floor(Date.now() / 1000) - 60); // 60 seconds in the past — ensures simulation also fails
 
-    const sig = await program.methods[methodName]()
-      .accounts({
-        compDefAccount: compDefPDA,
-        payer: owner.publicKey,
-        mxeAccount: mxeAddress,
-        addressLookupTable,
-        lutProgram: AddressLookupTableProgram.programId,
-      } as any)
-      .signers([owner])
-      .rpc({
-        commitment: "confirmed",
-      });
+    try {
+      await program.methods
+        .executePayment(
+          computationOffset,
+          Array.from(paymentId),
+          PAYMENT_AMOUNT,
+          Array.from(randomBytes(32)),
+          new anchor.BN(nonce.toString()),
+          Array.from(payer.publicKey.toBytes()),
+          expiredAt
+        )
+        .accountsPartial({
+          payer: payer.publicKey,
+          broadcaster: broadcaster.publicKey,
+          recipient: recipient.publicKey,
+          mint,
+          paymentReceipt: paymentReceipt(paymentId),
+          payerTokenAccount: senderTokenAccount,
+          recipientTokenAccount,
+          treasuryTokenAccount,
+          broadcasterTokenAccount,
+          ...arciumAccounts(computationOffset),
+        })
+        .signers([payer, broadcaster])
+        .rpc();
 
-    const finalizeTx = await buildFinalizeCompDefTx(
-      provider,
-      Buffer.from(offset).readUInt32LE(),
-      program.programId
-    );
-
-    const latestBlockhash = await provider.connection.getLatestBlockhash();
-    finalizeTx.recentBlockhash = latestBlockhash.blockhash;
-    finalizeTx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
-
-    finalizeTx.sign(owner);
-
-    await provider.sendAndConfirm(finalizeTx);
-
-    return sig;
-  }
+      assert.fail("Expected PaymentExpired error");
+    } catch (err) {
+      const error = ensureError(err);
+      assert.match(error.message, /PaymentExpired/);
+    }
+  });
 });
