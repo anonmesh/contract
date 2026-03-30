@@ -18,4 +18,6 @@ pub enum ErrorCode {
     InvalidTreasury,
     #[msg("Payment payload has expired")]
     PaymentExpired,
+    #[msg("Payment amount must be greater than zero")]
+    InvalidAmount,
 }

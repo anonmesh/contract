@@ -4,7 +4,9 @@ use arcium_anchor::prelude::*;
 
 use super::payment_callback::PaymentV3Callback;
 use crate::{ArciumSignerAccount, ID, ID_CONST};
-use crate::constants::{COMP_DEF_OFFSET_PAYMENT_STATS, TREASURY_WALLET};
+use crate::constants::{
+    BROADCASTER_SHARE_OF_TREASURY_BPS, COMP_DEF_OFFSET_PAYMENT_STATS, TREASURY_CUT_BPS, TREASURY_WALLET,
+};
 use crate::errors::ErrorCode;
 use crate::events::PaymentEvent;
 use crate::state::PaymentReceipt;
@@ -115,6 +117,7 @@ pub(crate) fn handler(
         Clock::get()?.unix_timestamp <= expires_at,
         ErrorCode::PaymentExpired
     );
+    require!(amount > 0, ErrorCode::InvalidAmount);
 
     msg!("Payer: {}", ctx.accounts.payer.key());
     msg!("Sign PDA: {}", ctx.accounts.sign_pda_account.key());
@@ -146,7 +149,7 @@ pub(crate) fn handler(
     );
 
     let treasury_total_amount = amount
-        .checked_mul(2)
+        .checked_mul(TREASURY_CUT_BPS)
         .ok_or(ErrorCode::MathOverflow)?
         / 100;
 
@@ -173,7 +176,7 @@ pub(crate) fn handler(
         );
 
         broadcaster_share_amount = treasury_total_amount
-            .checked_mul(30)
+            .checked_mul(BROADCASTER_SHARE_OF_TREASURY_BPS)
             .ok_or(ErrorCode::MathOverflow)?
             / 100;
     } else if ctx.accounts.broadcaster_token_account.is_some() {
