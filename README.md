@@ -14,8 +14,7 @@ This program implements a payment distribution system where payments can be spli
 
 ### Key Features
 
-- Token whitelist management
-- Payment execution with broadcaster revenue sharing (70/30 split)
+- Payment execution with a 2% treasury cut; when a broadcaster co-signs, 30% of that cut goes to the broadcaster and 70% to treasury (see `constants.rs`)
 - Arcium encrypted computation integration
 - Payment statistics tracking via confidential computations
 
@@ -64,12 +63,6 @@ arcium deploy \
 npx ts-node init-comp-def-final.ts
 ```
 
-### 4. Whitelist tokens
-
-```bash
-npx ts-node scripts/whitelist-tokens.ts
-```
-
 ## Testing
 
 ```bash
@@ -105,7 +98,7 @@ yarn test
 
 ## Program IDs
 
-- Program ID: `7fvHNYVuZP6EYt68GLUa4kU8f8dCBSaGafL9aDhhtMZN`
+- Program ID: `7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks` (matches `Anchor.toml` / `declare_id!` in `programs/ble-revshare`)
 - Arcium Program ID: `Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ`
 
 ## License

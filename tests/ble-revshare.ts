@@ -306,6 +306,45 @@ describe("ble-revshare", () => {
     }
   });
 
+  test("rejects zero payment amount", async () => {
+    const computationOffset = new anchor.BN(randomBytes(8), "hex");
+    const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
+    const paymentId = Buffer.from(randomBytes(32));
+    const expiresAt = new anchor.BN(Math.floor(Date.now() / 1000) + PAYLOAD_TTL_SECS);
+
+    try {
+      await program.methods
+        .executePayment(
+          computationOffset,
+          Array.from(paymentId),
+          new anchor.BN(0),
+          Array.from(randomBytes(32)),
+          new anchor.BN(nonce.toString()),
+          Array.from(payer.publicKey.toBytes()),
+          expiresAt
+        )
+        .accountsPartial({
+          payer: payer.publicKey,
+          broadcaster: broadcaster.publicKey,
+          recipient: recipient.publicKey,
+          mint,
+          paymentReceipt: paymentReceipt(paymentId),
+          payerTokenAccount: senderTokenAccount,
+          recipientTokenAccount,
+          treasuryTokenAccount,
+          broadcasterTokenAccount,
+          ...arciumAccounts(computationOffset),
+        })
+        .signers([payer, broadcaster])
+        .rpc();
+
+      assert.fail("Expected InvalidAmount error");
+    } catch (err) {
+      const error = ensureError(err);
+      assert.match(error.message, /InvalidAmount/);
+    }
+  });
+
   test("rejects expired payment payload", async () => {
     const computationOffset = new anchor.BN(randomBytes(8), "hex");
     const nonce = BigInt(deserializeLE(randomBytes(16)).toString());
