@@ -50,3 +50,13 @@ tmp/
 temp/
 *.js
 !migrations/*.js
+
+# Working specs (do not commit — internal scratch docs)
+ANONBETA1_SPEC.md
+
+# Keypairs — ALL Solana keypairs must be gitignored (defense in depth)
+*testpair*.json
+*-keypair.json
+*_keypair.json
+id.json
+solana-*.json

@@ -317,6 +317,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "anonbeta1"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "arcium-anchor",
+ "arcium-client",
+ "arcium-macros",
+ "blake3",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
