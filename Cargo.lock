@@ -321,6 +321,7 @@ name = "anonbeta1"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "anchor-spl",
  "arcium-anchor",
  "arcium-client",
  "arcium-macros",
