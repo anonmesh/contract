@@ -17,3 +17,8 @@ pub struct BeaconHeartbeat {
     pub timestamp: i64,
 }
 
+#[event]
+pub struct BeaconBindCompleted {
+    pub commitment_ciphertext: [u8; 32],
+    pub commitment_nonce: u128,
+}

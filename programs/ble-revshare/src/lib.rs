@@ -12,7 +12,7 @@ pub use instructions::execute_payment::*;
 pub use instructions::init_comp_def::*;
 pub use instructions::payment_callback::*;
 
-declare_id!("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks");
+declare_id!("i1cAa6iWmL8GRdZisyX2sgJ43jdemdUZh2QbstxTJ2C");
 
 #[arcium_program]
 pub mod ble_revshare {

@@ -7,7 +7,7 @@ skip-lint = false
 
 [programs.devnet]
 anonbeta1 = "anon7uu8UtVoFgS8GCSfw2RqyphJhkN3xEjgPwznYDe"
-ble_revshare = "7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks"
+ble_revshare = "i1cAa6iWmL8GRdZisyX2sgJ43jdemdUZh2QbstxTJ2C"
 
 [programs.localnet]
 anonbeta1 = "anon7uu8UtVoFgS8GCSfw2RqyphJhkN3xEjgPwznYDe"
