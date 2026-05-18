@@ -17,3 +17,23 @@ pub struct BeaconHeartbeat {
     pub timestamp: i64,
 }
 
+#[event]
+pub struct RelayStatsInitialized {
+    pub operator: Pubkey,
+    pub stats_pda: Pubkey,
+    pub beacon_pda: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted by the Arcium callback after a successful encrypted counter
+/// increment. The count itself is NOT in the event — only the public
+/// liveness markers (which `stats_pda` moved, when, and how many total
+/// updates the on-chain account has seen).
+#[event]
+pub struct RelayRecorded {
+    pub operator: Pubkey,
+    pub stats_pda: Pubkey,
+    pub update_count: u64,
+    pub timestamp: i64,
+}
+

@@ -1,0 +1,166 @@
+use anchor_lang::prelude::*;
+use arcium_anchor::prelude::*;
+use arcium_client::idl::arcium::types::CallbackAccount;
+
+use super::relay_increment_callback::RelayIncrementCallback;
+use crate::constants::COMP_DEF_OFFSET_RELAY_INCREMENT;
+use crate::errors::ErrorCode;
+use crate::state::{BeaconRegistry, PrivateRelayStats};
+use crate::{ArciumSignerAccount, ID, ID_CONST};
+
+/// Queue an encrypted increment of the operator's relay counter.
+///
+/// Inputs:
+/// - `computation_offset`: arbitrary client-chosen u64 (used to derive the
+///   per-computation Arcium PDA). Conventionally a fresh random.
+/// - `new_nonce`: the nonce the client will use to encrypt the **next**
+///   ciphertext output by the circuit. Stored on-chain by the callback so
+///   the operator can decrypt later.
+/// - `pub_key`: operator's x25519 public key (must match the one already
+///   stored in `PrivateRelayStats`; re-passed because Arcium queue requires
+///   it as an `ArgBuilder` input).
+///
+/// The current encrypted count + its nonce come from the on-chain
+/// `PrivateRelayStats` PDA — no need for the client to pass them.
+#[queue_computation_accounts("relay_increment", payer)]
+#[derive(Accounts)]
+#[instruction(computation_offset: u64)]
+pub struct RecordRelay<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// Operator's BeaconRegistry — proof they are a registered beacon.
+    #[account(
+        seeds = [b"beacon", payer.key().as_ref()],
+        bump = beacon.bump,
+        has_one = operator @ ErrorCode::OperatorMismatch,
+        constraint = beacon.operator == payer.key() @ ErrorCode::OperatorMismatch,
+    )]
+    pub beacon: Account<'info, BeaconRegistry>,
+
+    /// Required only for `has_one = operator` to type-check.
+    /// CHECK: same as payer; constrained above.
+    #[account(address = payer.key())]
+    pub operator: UncheckedAccount<'info>,
+
+    /// Operator's PrivateRelayStats — current encrypted count read by client.
+    /// Marked `mut` because the callback will update it.
+    #[account(
+        mut,
+        seeds = [b"relay_stats", payer.key().as_ref()],
+        bump = stats.bump,
+        has_one = operator @ ErrorCode::OperatorMismatch,
+        constraint = stats.beacon_pda == beacon.key() @ ErrorCode::BeaconPdaMismatch,
+    )]
+    pub stats: Account<'info, PrivateRelayStats>,
+
+    // --- Arcium accounts ---
+
+    #[account(
+        init_if_needed,
+        space = 9,
+        payer = payer,
+        seeds = [b"ArciumSignerAccount"],
+        bump,
+    )]
+    pub sign_pda_account: Account<'info, ArciumSignerAccount>,
+
+    #[account(address = derive_mxe_pda!())]
+    pub mxe_account: Account<'info, MXEAccount>,
+
+    #[account(
+        mut,
+        address = derive_mempool_pda!(mxe_account, ErrorCode::ClusterNotSet)
+    )]
+    /// CHECK: mempool_account
+    pub mempool_account: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        address = derive_execpool_pda!(mxe_account, ErrorCode::ClusterNotSet)
+    )]
+    /// CHECK: executing_pool
+    pub executing_pool: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        address = derive_comp_pda!(computation_offset, mxe_account, ErrorCode::ClusterNotSet)
+    )]
+    /// CHECK: computation_account
+    pub computation_account: UncheckedAccount<'info>,
+
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_RELAY_INCREMENT))]
+    pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
+
+    #[account(
+        mut,
+        address = derive_cluster_pda!(mxe_account, ErrorCode::ClusterNotSet)
+    )]
+    pub cluster_account: Box<Account<'info, Cluster>>,
+
+    #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
+    pub pool_account: Box<Account<'info, FeePool>>,
+
+    #[account(mut, address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
+    pub clock_account: Box<Account<'info, ClockAccount>>,
+
+    pub system_program: Program<'info, System>,
+    pub arcium_program: Program<'info, Arcium>,
+}
+
+pub(crate) fn handler(
+    ctx: Context<RecordRelay>,
+    computation_offset: u64,
+    new_nonce: u128,
+    pub_key: [u8; 32],
+) -> Result<()> {
+    // Validate the supplied pub_key matches the one stored at init time.
+    // Prevents a caller from swapping decrypt keys without re-init.
+    require!(
+        ctx.accounts.stats.x25519_pubkey == pub_key,
+        ErrorCode::OperatorMismatch
+    );
+
+    // Build Arcium computation args: current ciphertext + nonce + pubkey,
+    // re-encrypted under a fresh nonce on the output side.
+    let current_ciphertext = ctx.accounts.stats.encrypted_count;
+    let current_nonce = ctx.accounts.stats.nonce;
+
+    let args = ArgBuilder::new()
+        .x25519_pubkey(pub_key)
+        .plaintext_u128(current_nonce)
+        .encrypted_u64(current_ciphertext)
+        // Output nonce — the new ciphertext will be encrypted under this.
+        .plaintext_u128(new_nonce)
+        .build();
+
+    ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
+
+    // Pass the PrivateRelayStats PDA as a callback-extra account so the
+    // callback can write the new ciphertext back.
+    let stats_acc = CallbackAccount {
+        pubkey: ctx.accounts.stats.key(),
+        is_writable: true,
+    };
+
+    queue_computation(
+        ctx.accounts,
+        computation_offset,
+        args,
+        vec![RelayIncrementCallback::callback_ix(
+            computation_offset,
+            &ctx.accounts.mxe_account,
+            &[stats_acc],
+        )?],
+        1,
+        0,
+    )?;
+
+    msg!(
+        "relay increment queued: operator={} offset={}",
+        ctx.accounts.payer.key(),
+        computation_offset
+    );
+
+    Ok(())
+}

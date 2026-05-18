@@ -10,4 +10,12 @@ pub enum ErrorCode {
     OperatorMismatch,
     #[msg("Heartbeat counter overflow")]
     HeartbeatOverflow,
+    #[msg("Arcium cluster is not set")]
+    ClusterNotSet,
+    #[msg("Encrypted computation was aborted or verification failed")]
+    AbortedComputation,
+    #[msg("Update counter overflow")]
+    UpdateOverflow,
+    #[msg("Relay stats must be paired with the operator's BeaconRegistry PDA")]
+    BeaconPdaMismatch,
 }

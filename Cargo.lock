@@ -318,9 +318,12 @@ dependencies = [
 
 [[package]]
 name = "anonbeta1"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
+ "arcium-anchor",
+ "arcium-client",
+ "arcium-macros",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 [package]
 name = "anonbeta1"
-version = "0.1.0"
-description = "Anonmesh beacon registry program"
+version = "0.2.0"
+description = "Anonmesh beacon registry program with Arcium-encrypted private relay counters"
 edition = "2021"
 
 [lib]
@@ -14,13 +14,16 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["anchor-lang/idl-build", "arcium-anchor/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
 
 [dependencies]
-anchor-lang = "0.32.1"
+anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+arcium-client = { version = "=0.9.3", default-features = false }
+arcium-macros = { version = "=0.9.3" }
+arcium-anchor = { version = "=0.9.3" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
