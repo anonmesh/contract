@@ -68,10 +68,9 @@ pub mod anonbeta1 {
     pub fn record_relay(
         ctx: Context<RecordRelay>,
         computation_offset: u64,
-        new_nonce: u128,
         pub_key: [u8; 32],
     ) -> Result<()> {
-        instructions::record_relay::handler(ctx, computation_offset, new_nonce, pub_key)
+        instructions::record_relay::handler(ctx, computation_offset, pub_key)
     }
 
     /// Arcium-invoked callback. Verifies the MPC output signature and
