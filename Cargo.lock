@@ -318,9 +318,14 @@ dependencies = [
 
 [[package]]
 name = "anonbeta1"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
+ "anchor-spl",
+ "arcium-anchor",
+ "arcium-client",
+ "arcium-macros",
+ "solana-keccak-hasher",
 ]
 
 [[package]]
@@ -937,18 +942,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "ble-revshare"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anchor-spl",
- "arcium-anchor",
- "arcium-client",
- "arcium-macros",
- "blake3",
 ]
 
 [[package]]

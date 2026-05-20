@@ -15,14 +15,14 @@ pub struct InitBeaconBindCompDef<'info> {
     pub mxe_account: Box<Account<'info, MXEAccount>>,
 
     #[account(mut)]
-    /// CHECK: comp_def_account
+    /// CHECK: comp_def_account is derived and validated by the Arcium program.
     pub comp_def_account: UncheckedAccount<'info>,
 
     #[account(mut)]
-    /// CHECK: address_lookup_table validated by arcium program
+    /// CHECK: address_lookup_table is validated by the Arcium program.
     pub address_lookup_table: UncheckedAccount<'info>,
 
-    /// CHECK: lut_program
+    /// CHECK: LUT program account.
     pub lut_program: UncheckedAccount<'info>,
 
     pub arcium_program: Program<'info, Arcium>,
@@ -33,6 +33,10 @@ pub(crate) fn handler(ctx: Context<InitBeaconBindCompDef>) -> Result<()> {
     init_comp_def(
         ctx.accounts,
         Some(CircuitSource::OffChain(OffChainCircuitSource {
+            // TODO(security): arcium-comp-def-hosting-durability. circuit_hash!
+            // prevents tampering, but this Supabase bucket is a single
+            // availability dependency for fresh MXE/cluster initialization.
+            // Mirror to a durable commit-pinned or content-addressed host.
             source: "https://fosjbclmsqobydunswin.supabase.co/storage/v1/object/public/arcium/beacon_bind.arcis".to_string(),
             hash: circuit_hash!("beacon_bind"),
         })),

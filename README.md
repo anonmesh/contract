@@ -1,23 +1,44 @@
-# BLE Revenue Sharing
+# Anonmesh Contract
 
-A Solana smart contract for handling revenue sharing payments with encrypted computation support via Arcium.
+Solana programs and Arcium circuits for anonmesh beacon registration, co-signed
+settlement, and private relay accounting.
 
 ## Overview
 
-This program implements a payment distribution system where payments can be split between recipients and broadcasters. It uses Arcium's confidential computing infrastructure for encrypted payment processing.
+`anonbeta1` binds an operator wallet to an encrypted RNS transport identity,
+then lets mobile clients send partially signed transfer transactions over
+anonmesh/RNS. The announced beacon co-signs the transaction, submits it to
+Solana, and receives its revenue share inside the same on-chain settlement.
+Arcium is used for private operator-to-RNS binding and private relay stats.
 
 ## Architecture
 
 ### Programs
 
-- `ble-revshare`: Main program handling payment execution and revenue distribution
+- `anonbeta1`: RNS beacon registry, co-signed token settlement, and
+  Arcium-private operator-to-RNS binding / relay stats
 
 ### Key Features
 
-- Token whitelist management
-- Payment execution with broadcaster revenue sharing (70/30 split)
-- Arcium encrypted computation integration
-- Payment statistics tracking via confidential computations
+- Private operator-to-RNS binding through the `beacon_bind` Arcium circuit
+- Co-signed SPL-token settlement: sender signs first, beacon co-signs and earns
+  the configured share
+- Encrypted relay count through the `relay_increment` Arcium circuit
+- Public state limited to beacon metadata, binding verification state,
+  settlement receipts, and relay liveness timestamps
+
+## Mobile Flow
+
+1. The beacon announces itself over anonmesh/RNS.
+2. The mobile app creates a transfer with the beacon operator as a required
+   co-signer, fills `{ settlement_id, recipient ATA, amount, beacon_share_bps }`,
+   and partially signs as the sender.
+3. The partial transaction is sent over anonmesh/RNS to the beacon.
+4. The beacon co-signs and submits `execute_cosigned_transfer`.
+5. `anonbeta1` verifies the beacon is registered and Arcium-bound, transfers
+   funds to the recipient and beacon ATA, and writes a settlement receipt.
+6. The beacon can call `record_relay` with the settlement hash to update its
+   encrypted Arcium relay counter.
 
 ## Prerequisites
 
@@ -58,41 +79,36 @@ arcium deploy \
   --rpc-url "https://devnet.helius-rpc.com/?api-key=YOUR_API_KEY"
 ```
 
-### 3. Initialize computation definition
+### 3. Initialize computation definitions
 
 ```bash
-npx ts-node init-comp-def-final.ts
+# Initialize beacon_bind and relay_increment definitions after deploy.
+# Use generated anonbeta1 client code; standalone init scripts are not included.
 ```
 
-### 4. Whitelist tokens
-
-```bash
-npx ts-node scripts/whitelist-tokens.ts
-```
-
-## Testing
+## Verification
 
 ```bash
 export ANCHOR_PROVIDER_URL="https://devnet.helius-rpc.com/?api-key=YOUR_API_KEY"
 export ANCHOR_WALLET="~/.config/solana/id.json"
 export ARCIUM_CLUSTER_OFFSET=456
 
-yarn test
+arcium build
 ```
+
+`arcium build` is the canonical verification command for this repo. It compiles
+the encrypted instructions and the Arcium-enabled Anchor program together.
+Anchor-only builds are not sufficient for audit or release.
 
 ## Project Structure
 
 ```
 .
 ├── programs/
-│   └── ble-revshare/
+│   └── anonbeta1/
 │       └── src/
 │           └── lib.rs          # Main program logic
-├── tests/
-│   └── ble-revshare.ts         # Test suite
-├── encrypted-ixs/              # Encrypted instruction artifacts
-├── migrations/                 # Deployment migrations
-└── Arcium.toml                 # Arcium configuration
+└── encrypted-ixs/              # Encrypted instruction artifacts
 ```
 
 ## Environment Variables
@@ -103,9 +119,13 @@ yarn test
 | `ANCHOR_WALLET` | Path to wallet keypair | Yes |
 | `ARCIUM_CLUSTER_OFFSET` | Arcium cluster offset | Yes |
 
+The repository expects a local deploy keypair at the path you set in
+`ANCHOR_WALLET` or pass with `--keypair-path`. Keypair files are intentionally
+gitignored; fresh clones must provide their own.
+
 ## Program IDs
 
-- Program ID: `7fvHNYVuZP6EYt68GLUa4kU8f8dCBSaGafL9aDhhtMZN`
+- anonbeta1 Program ID: `anon7uu8UtVoFgS8GCSfw2RqyphJhkN3xEjgPwznYDe`
 - Arcium Program ID: `Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ`
 
 ## License
